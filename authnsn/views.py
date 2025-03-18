@@ -889,3 +889,12 @@ def event_list(request):
 def event_images(request, event_id):
     event = get_object_or_404(Event, id=event_id)
     return render(request, 'authnsn/event_images.html', {'event': event})
+
+# views.py
+from django.views.generic import ListView
+from .models import Facultylist
+
+class FacultyListView(ListView):
+    model = Facultylist
+    template_name = 'faculty_list.html'
+    context_object_name = 'faculty_members'

@@ -113,3 +113,13 @@ class EventAdmin(admin.ModelAdmin):
 @admin.register(EventImage)
 class EventImageAdmin(admin.ModelAdmin):
     list_display = ('event', 'caption')
+
+
+# admin.py
+from django.contrib import admin
+from .models import Facultylist
+
+@admin.register(Facultylist)
+class FacultyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'designation', 'email')
+    search_fields = ('name', 'designation')

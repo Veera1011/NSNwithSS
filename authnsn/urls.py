@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import StudentLogin, StaffLogin, Register, Profile, logout_user, home,get_nasa_apod, UpdatePassword
+from .views import StudentLogin, StaffLogin, Register, Profile, logout_user, home,get_nasa_apod, UpdatePassword, FacultyListView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .import views
 from django.urls import path
@@ -8,6 +8,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 urlpatterns = [
     path('', home, name='home'),
+    path('faculty_list/', FacultyListView.as_view(), name='faculty_list'),
     path('get_nasa_apod/', views.get_nasa_apod, name='get_nasa_apod'),
     path('student/login/', StudentLogin.as_view(), name='student-login'),
     path('staff/login/', StaffLogin.as_view(), name='staff-login'),
