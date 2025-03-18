@@ -6,7 +6,6 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.contrib.auth import get_user_model
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponse, JsonResponse
-from studentnsn.models import Academics, PersonalInformation
 from authnsn.models import Staff
 from ..models import StudentsAttendance,AttendancePercentage
 from authnsn.session_manager import SessionManager
@@ -197,6 +196,313 @@ class SaveAttendanceView(View):
             return JsonResponse({
                 'error': f'Error saving attendance: {str(e)}'
             }, status=400)
+
+
+
+# views.py
+from django.shortcuts import render, redirect, get_object_or_404
+from django.http import HttpResponse, JsonResponse
+from django.views import View
+from django.core.exceptions import PermissionDenied
+from ..models import (
+    Faculty, ResearchGuidance, AcademicEvent, ResearchProject,
+    Publication, Award, PublicationCategory
+)
+from authnsn.session_manager import SessionManager
+from django.contrib.auth import get_user_model
+import jwt
+
+class Visualization(View):
+    session_manager = SessionManager()
+    
+    def get(self, request):
+        # Verify the session and get the staff member
+        session_id = request.COOKIES.get('session_id')
+        if not session_id:
+            return redirect('staff-login')
+        
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                raise jwt.InvalidTokenError()
+            
+            user = get_user_model().objects.get(id=session.user_id)
+            staff_id = user.username
+            
+            # Get faculty data
+            faculty = get_object_or_404(Faculty, staff_id=staff_id)
+            
+            # Prepare context
+            context = {
+                'user_type': 'staff',
+                'staff_id': staff_id,
+                'name': faculty.name
+            }
+            
+            return render(request, 'visualization.html', context)
+            
+        except (jwt.InvalidTokenError, get_user_model().DoesNotExist):
+            response = redirect('staff-login')
+            response.delete_cookie('session_id')
+            return response
+
+    def post(self, request):
+        # Process any form submissions related to visualization settings
+        pass
+
+class VisualizationData(View):
+    session_manager = SessionManager()
+    
+    def get(self, request, data_type):
+        # Verify the session and get the staff member
+        session_id = request.COOKIES.get('session_id')
+        if not session_id:
+            return JsonResponse({'error': 'Not authenticated'}, status=401)
+        
+        try:
+            session = self.session_manager.get_session(session_id)
+            if not session:
+                raise jwt.InvalidTokenError()
+            
+            user = get_user_model().objects.get(id=session.user_id)
+            staff_id = user.username
+            
+            # Get faculty data
+            faculty = get_object_or_404(Faculty, staff_id=staff_id)
+            
+            # Return data based on the requested data_type
+            if data_type == 'research_guidance':
+                data = self.get_research_guidance_data(faculty)
+            elif data_type == 'academic_events':
+                data = self.get_academic_events_data(faculty)
+            elif data_type == 'publications':
+                data = self.get_publications_data(faculty)
+            elif data_type == 'research_projects':
+                data = self.get_research_projects_data(faculty)
+            elif data_type == 'experience':
+                data = self.get_experience_data(faculty)
+            else:
+                return JsonResponse({'error': 'Invalid data type'}, status=400)
+            
+            return JsonResponse(data)
+            
+        except (jwt.InvalidTokenError, get_user_model().DoesNotExist):
+            return JsonResponse({'error': 'Authentication failed'}, status=401)
+    
+    def get_research_guidance_data(self, faculty):
+        guidance = ResearchGuidance.objects.filter(faculty=faculty)
+        labels = []
+        awarded_data = []
+        guidance_data = []
+        
+        for g in guidance:
+            labels.append(g.get_discipline_display())
+            awarded_data.append(g.awarded)
+            guidance_data.append(g.guidance)
+        
+        return {
+            'labels': labels,
+            'datasets': [
+                {
+                    'label': 'Awarded',
+                    'data': awarded_data,
+                    'backgroundColor': 'rgba(54, 162, 235, 0.5)',
+                    'borderColor': 'rgba(54, 162, 235, 1)',
+                    'borderWidth': 1
+                },
+                {
+                    'label': 'Under Guidance',
+                    'data': guidance_data,
+                    'backgroundColor': 'rgba(255, 99, 132, 0.5)',
+                    'borderColor': 'rgba(255, 99, 132, 1)',
+                    'borderWidth': 1
+                }
+            ]
+        }
+    
+    def get_academic_events_data(self, faculty):
+        events = AcademicEvent.objects.filter(faculty=faculty)
+        event_types = dict(AcademicEvent.EVENT_TYPE_CHOICES)
+        roles = dict(AcademicEvent.ROLE_CHOICES)
+        
+        attended_data = []
+        conducted_data = []
+        labels = []
+        
+        for event_type_key, event_type_name in event_types.items():
+            labels.append(event_type_name)
+            
+            attended_count = events.filter(
+                event_type=event_type_key,
+                role='ATTENDED'
+            ).first()
+            
+            conducted_count = events.filter(
+                event_type=event_type_key,
+                role='CONDUCTED'
+            ).first()
+            
+            attended_data.append(attended_count.count if attended_count else 0)
+            conducted_data.append(conducted_count.count if conducted_count else 0)
+        
+        return {
+            'labels': labels,
+            'datasets': [
+                {
+                    'label': 'Attended',
+                    'data': attended_data,
+                    'backgroundColor': 'rgba(75, 192, 192, 0.5)',
+                    'borderColor': 'rgba(75, 192, 192, 1)',
+                    'borderWidth': 1
+                },
+                {
+                    'label': 'Conducted',
+                    'data': conducted_data,
+                    'backgroundColor': 'rgba(153, 102, 255, 0.5)',
+                    'borderColor': 'rgba(153, 102, 255, 1)',
+                    'borderWidth': 1
+                }
+            ]
+        }
+    
+    def get_publications_data(self, faculty):
+        categories = PublicationCategory.objects.filter(faculty=faculty).first()
+        if not categories:
+            return {
+                'labels': [],
+                'datasets': [{
+                    'label': 'Publications',
+                    'data': [],
+                    'backgroundColor': [],
+                    'borderColor': []
+                }]
+            }
+        
+        labels = [
+            'Journal - National', 
+            'Journal - International',
+            'Conference - National',
+            'Conference - International',
+            'Books Published',
+            'Popular Articles'
+        ]
+        
+        data = [
+            categories.journal_national,
+            categories.journal_international,
+            categories.conference_national,
+            categories.conference_international,
+            categories.books_published,
+            categories.popular_articles
+        ]
+        
+        background_colors = [
+            'rgba(255, 99, 132, 0.5)',
+            'rgba(54, 162, 235, 0.5)',
+            'rgba(255, 206, 86, 0.5)',
+            'rgba(75, 192, 192, 0.5)',
+            'rgba(153, 102, 255, 0.5)',
+            'rgba(255, 159, 64, 0.5)'
+        ]
+        
+        border_colors = [
+            'rgba(255, 99, 132, 1)',
+            'rgba(54, 162, 235, 1)',
+            'rgba(255, 206, 86, 1)',
+            'rgba(75, 192, 192, 1)',
+            'rgba(153, 102, 255, 1)',
+            'rgba(255, 159, 64, 1)'
+        ]
+        
+        return {
+            'labels': labels,
+            'datasets': [{
+                'label': 'Publications',
+                'data': data,
+                'backgroundColor': background_colors,
+                'borderColor': border_colors,
+                'borderWidth': 1
+            }]
+        }
+    
+    def get_research_projects_data(self, faculty):
+        projects = ResearchProject.objects.filter(faculty=faculty)
+        
+        # Group by status and project type
+        completed_major = projects.filter(status='COMPLETED', project_type='MAJOR').count()
+        completed_minor = projects.filter(status='COMPLETED', project_type='MINOR').count()
+        ongoing_major = projects.filter(status='ONGOING', project_type='MAJOR').count()
+        ongoing_minor = projects.filter(status='ONGOING', project_type='MINOR').count()
+        
+        # Calculate total funding by category
+        completed_major_amount = sum(float(p.amount) for p in projects.filter(status='COMPLETED', project_type='MAJOR'))
+        completed_minor_amount = sum(float(p.amount) for p in projects.filter(status='COMPLETED', project_type='MINOR'))
+        ongoing_major_amount = sum(float(p.amount) for p in projects.filter(status='ONGOING', project_type='MAJOR'))
+        ongoing_minor_amount = sum(float(p.amount) for p in projects.filter(status='ONGOING', project_type='MINOR'))
+        
+        return {
+            'counts': {
+                'labels': ['Completed Major', 'Completed Minor', 'Ongoing Major', 'Ongoing Minor'],
+                'datasets': [{
+                    'label': 'Project Counts',
+                    'data': [completed_major, completed_minor, ongoing_major, ongoing_minor],
+                    'backgroundColor': [
+                        'rgba(75, 192, 192, 0.5)',
+                        'rgba(54, 162, 235, 0.5)',
+                        'rgba(255, 206, 86, 0.5)',
+                        'rgba(153, 102, 255, 0.5)'
+                    ],
+                    'borderColor': [
+                        'rgba(75, 192, 192, 1)',
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 206, 86, 1)',
+                        'rgba(153, 102, 255, 1)'
+                    ],
+                    'borderWidth': 1
+                }]
+            },
+            'amounts': {
+                'labels': ['Completed Major', 'Completed Minor', 'Ongoing Major', 'Ongoing Minor'],
+                'datasets': [{
+                    'label': 'Funding Amount (₹)',
+                    'data': [completed_major_amount, completed_minor_amount, ongoing_major_amount, ongoing_minor_amount],
+                    'backgroundColor': [
+                        'rgba(75, 192, 192, 0.5)',
+                        'rgba(54, 162, 235, 0.5)',
+                        'rgba(255, 206, 86, 0.5)',
+                        'rgba(153, 102, 255, 0.5)'
+                    ],
+                    'borderColor': [
+                        'rgba(75, 192, 192, 1)',
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 206, 86, 1)',
+                        'rgba(153, 102, 255, 1)'
+                    ],
+                    'borderWidth': 1
+                }]
+            }
+        }
+    
+    def get_experience_data(self, faculty):
+        labels = ['Teaching & Research', 'Industry']
+        data = [faculty.teaching_research_experience, faculty.industry_experience]
+        
+        return {
+            'labels': labels,
+            'datasets': [{
+                'label': 'Experience (Years)',
+                'data': data,
+                'backgroundColor': [
+                    'rgba(255, 99, 132, 0.5)',
+                    'rgba(54, 162, 235, 0.5)'
+                ],
+                'borderColor': [
+                    'rgba(255, 99, 132, 1)',
+                    'rgba(54, 162, 235, 1)'
+                ],
+                'borderWidth': 1
+            }]
+        }
             
             
             
