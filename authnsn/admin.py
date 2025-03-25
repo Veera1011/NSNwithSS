@@ -1,6 +1,22 @@
 from django.contrib import admin
 from .models import Student, Staff,StaffPassword,StudentPassword
+from django.contrib import admin
+from .models import LoginAttempt
 
+@admin.register(LoginAttempt)
+class LoginAttemptAdmin(admin.ModelAdmin):
+    list_display = ('identifier', 'role', 'attempts', 'locked', 'locked_until')
+    list_filter = ('role', 'locked')
+    actions = ['unlock_accounts']
+    
+    def unlock_accounts(self, request, queryset):
+        for attempt in queryset:
+            attempt.attempts = 0
+            attempt.locked = False
+            attempt.locked_until = None
+            attempt.save()
+        self.message_user(request, f"{queryset.count()} accounts unlocked successfully.")
+    unlock_accounts.short_description = "Unlock selected accounts"
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
     list_display = ('roll_number', 'get_full_name', 'student_type', 'email', 'is_registered', 'age')
