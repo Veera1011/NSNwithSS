@@ -4,7 +4,22 @@ from django.core.validators import RegexValidator
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.core.validators import RegexValidator
+from django.db import models
+from django.utils import timezone
 
+class LoginAttempt(models.Model):
+    identifier = models.CharField(max_length=20)  # roll_number or staff_id
+    role = models.CharField(max_length=10)  # 'student' or 'staff'
+    attempts = models.IntegerField(default=0)
+    locked = models.BooleanField(default=False)
+    locked_until = models.DateTimeField(null=True, blank=True)
+    last_attempt = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ('identifier', 'role')
+    
+    def __str__(self):
+        return f"{self.identifier} ({self.role}) - Attempts: {self.attempts}"
 class Student(models.Model):
     STUDENT_TYPE_CHOICES = [
         ('regular', 'Regular'),
