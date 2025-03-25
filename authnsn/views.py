@@ -230,15 +230,40 @@ def hash_password(password):
 def check_password(hashed_password, password):
     return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
 
-# Custom Throttling Logic for Login Attempts
+from django.utils import timezone
+from datetime import timedelta
+
+def increment_failed_attempt(identifier, role):
+    attempt, created = LoginAttempt.objects.get_or_create(
+        identifier=identifier,
+        role=role,
+        defaults={'attempts': 1}
+    )
+    
+    if not created:
+        attempt.attempts += 1
+        if attempt.attempts >= 3:
+            attempt.locked = True
+            attempt.locked_until = timezone.now() + timedelta(hours=24)
+        attempt.save()
+
 def handle_throttling(identifier, role):
-    cache_key = FAILED_ATTEMPTS_KEY_TEMPLATE.format(identifier=identifier, role=role)
-    failed_attempts = cache.get(cache_key, 0)
-
-    if failed_attempts >= 3:
-        return True  # Too many failed attempts, throttle login
-
-    return False
+    try:
+        attempt = LoginAttempt.objects.get(identifier=identifier, role=role)
+        
+        if attempt.locked:
+            if attempt.locked_until and attempt.locked_until > timezone.now():
+                return True
+            else:
+                attempt.locked = False
+                attempt.locked_until = None
+                attempt.attempts = 0
+                attempt.save()
+                return False
+        return False
+        
+    except LoginAttempt.DoesNotExist:
+        return False
 
 
 # Registration View for Students and Staff
@@ -332,7 +357,6 @@ class Register(APIView):
             return Response({'error': 'Staff not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-
 class StudentLogin(APIView):
     permission_classes = [AllowAny]
     session_manager = SessionManager()
@@ -349,10 +373,10 @@ class StudentLogin(APIView):
         roll_number = request.data.get('roll_number')
         password = request.data.get('password')
         
-        # Check for throttling
+        # Check for account lock
         if handle_throttling(roll_number, 'student'):
             context = {
-                'error_message': 'Too many failed login attempts. Please try again after 24 hours.'
+                'error_message': 'Account locked due to too many failed attempts. Please try again after 24 hours or contact admin.'
             }
             return render(request, 'login.html', context)
             
@@ -361,14 +385,15 @@ class StudentLogin(APIView):
             user_password = StudentPassword.objects.get(identifier=roll_number)
             
             if check_password(user_password.password_hash, password):
+                # Reset failed attempts on successful login
+                LoginAttempt.objects.filter(identifier=roll_number, role='student').delete()
+                
                 user = get_user_model().objects.get(username=roll_number)
                 tokens = generate_tokens_for_user(user)
                
                 session_id = self.session_manager.create_session(
                     user.id, 'student', tokens
                 )
-                cache.delete(FAILED_ATTEMPTS_KEY_TEMPLATE.format(
-                    identifier=roll_number, role='student'))
                     
                 response = redirect('/student/dash/')
                 response.set_cookie(
@@ -379,11 +404,8 @@ class StudentLogin(APIView):
                 )
                 return response
             else:
-                # Handle failed login attempts
-                cache_key = FAILED_ATTEMPTS_KEY_TEMPLATE.format(
-                    identifier=roll_number, role='student')
-                failed_attempts = cache.get(cache_key, 0)
-                cache.set(cache_key, failed_attempts + 1, timeout=86400)
+                # Increment failed attempt
+                increment_failed_attempt(roll_number, 'student')
                 
                 context = {
                     'error_message': 'Invalid roll number or password. Please try again.'
@@ -391,6 +413,7 @@ class StudentLogin(APIView):
                 return render(request, 'login.html', context)
                 
         except (Student.DoesNotExist, StudentPassword.DoesNotExist):
+            increment_failed_attempt(roll_number, 'student')
             context = {
                 'error_message': 'Invalid roll number or password. Please try again.'
             }
@@ -415,7 +438,7 @@ class StaffLogin(APIView):
         if handle_throttling(staff_id, 'staff'):
             return HttpResponse(
                 """<div id="error-message" class="error-message">
-                    Too many failed login attempts. Please try again after 24 hours.
+                    Account locked due to too many failed attempts. Please try again after 24 hours or contact admin.
                 </div>""",
                 status=429
             )
@@ -425,15 +448,15 @@ class StaffLogin(APIView):
             user_password = StaffPassword.objects.get(identifier=staff_id, role='staff')
 
             if check_password(user_password.password_hash, password):
+                # Reset failed attempts on successful login
+                LoginAttempt.objects.filter(identifier=staff_id, role='staff').delete()
+                
                 user = get_user_model().objects.get(username=staff_id)
                 tokens = generate_tokens_for_user(user)
                 
                 session_id = self.session_manager.create_session(
                     user.id, 'staff', tokens
                 )
-
-                cache.delete(FAILED_ATTEMPTS_KEY_TEMPLATE.format(
-                    identifier=staff_id, role='staff'))
 
                 response = HttpResponse()
                 response['HX-Redirect'] = '/staff/dash/'
@@ -445,10 +468,7 @@ class StaffLogin(APIView):
                 )
                 return response
             else:
-                cache_key = FAILED_ATTEMPTS_KEY_TEMPLATE.format(
-                    identifier=staff_id, role='staff')
-                failed_attempts = cache.get(cache_key, 0)
-                cache.set(cache_key, failed_attempts + 1, timeout=86400)
+                increment_failed_attempt(staff_id, 'staff')
                 return HttpResponse(
                     """<div id="error-message" class="error-message">
                         Invalid credentials
@@ -456,6 +476,7 @@ class StaffLogin(APIView):
                     status=401
                 )
         except (Staff.DoesNotExist, StaffPassword.DoesNotExist):
+            increment_failed_attempt(staff_id, 'staff')
             return HttpResponse(
                 """<div id="error-message" class="error-message">
                     Invalid credentials
